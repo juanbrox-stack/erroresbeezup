@@ -4,13 +4,29 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Extractor de Errores MediaMarkt", page_icon="🛒")
+st.set_page_config(page_title="Extractor de Errores Marketplaces", page_icon="🛒", layout="wide")
 
-st.title("🛒 Extractor de Errores Mirakl/MediaMarkt")
-st.markdown("Pega la URL del reporte HTML de BeezUP para extraer los SKUs y sus errores en una tabla limpia.")
+st.title("🛒 Extractor Agrupado de Errores BeezUP")
+st.markdown("Pega la URL del reporte HTML para obtener los SKUs agrupados por el tipo de error.")
 
-# Input de la URL
-url = st.text_input("URL del reporte HTML:", placeholder="https://beezupmp2publication3.blob.core.windows.net/...")
+# --- NUEVA SECCIÓN: SELECCIÓN DE MARKETPLACE ---
+col_mp, col_url = st.columns([1, 3])
+
+with col_mp:
+    marketplace_options = ["MediaMarkt", "Carrefour", "Leroy Merlin", "Decathlon", "Conforama", "Cdiscoungt", "Otro (Personalizado)"]
+    mp_selected = st.selectbox("Selecciona el Marketplace:", marketplace_options)
+    
+    # Si elige "Otro", permitimos que escriba el nombre a mano
+    if mp_selected == "Otro (Personalizado)":
+        marketplace = st.text_input("Escribe el nombre del Marketplace:", "MiMarketplace")
+    else:
+        marketplace = mp_selected
+
+# Limpiamos el nombre para evitar problemas en el nombre del archivo (quitar espacios)
+mp_clean = marketplace.lower().replace(" ", "_")
+
+with col_url:
+    url = st.text_input(f"URL del reporte HTML de {marketplace}:", placeholder="https://beezupmp2publication3.blob.core.windows.net/...")
 
 def extract_data(url_report):
     try:
@@ -42,25 +58,48 @@ def extract_data(url_report):
         return None
 
 if url:
-    with st.spinner('Extrayendo datos...'):
+    with st.spinner(f'Procesando y agrupando errores de {marketplace}...'):
         df = extract_data(url)
         
         if df is not None and not df.empty:
-            st.success(f"¡Se han encontrado {len(df)} errores!")
+            st.success(f"¡Se han encontrado {len(df)} errores en total para {marketplace}!")
             
-            # Mostrar vista previa
-            st.dataframe(df, use_container_width=True)
+            # --- SECCIÓN DE VISTA PREVIA AGRUPADA ---
+            st.subheader("🔍 Resumen de errores encontrados")
             
-            # Botón para descargar en EXCEL (para evitar el problema de las comas)
+            df_counts = df['Error'].value_counts().reset_index()
+            df_counts.columns = ['Tipo de Error', 'Cantidad de SKUs Afectados']
+            st.dataframe(df_counts, use_container_width=True)
+            
+            st.subheader("📋 Detalle por Bloques de Error")
+            for error_msg, group in df.groupby('Error'):
+                with st.expander(f"❌ {error_msg} ({len(group)} SKUs afectados)"):
+                    st.write("SKUs afectados:")
+                    st.dataframe(group[['SKU']].reset_index(drop=True), use_container_width=True)
+            
+            # --- GENERACIÓN DE EXCEL ---
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False, sheet_name='Errores')
+                df_counts.to_excel(writer, sheet_name='Resumen Errores', index=False)
+                df.to_excel(writer, sheet_name='Todos los SKUs', index=False)
+                
+                for i, (error_msg, group) in enumerate(df.groupby('Error'), 1):
+                    sheet_name = f"Error_{i}" 
+                    group[['SKU']].to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            st.markdown("---")
+            st.subheader("💾 Descargar Reporte Optimizado")
+            
+            # NOMBRE DEL ARCHIVO DINÁMICO
+            file_name_dynamic = f"errores_{mp_clean}.xlsx"
+            
+            st.markdown(f"El archivo se descargará automáticamente como: `{file_name_dynamic}`")
             
             st.download_button(
-                label="📥 Descargar como Excel (.xlsx)",
+                label=f"📥 Descargar Excel de {marketplace} (.xlsx)",
                 data=buffer.getvalue(),
-                file_name="errores_marketplaces.xlsx",
+                file_name=file_name_dynamic,
                 mime="application/vnd.ms-excel"
             )
         else:
-            st.warning("No se encontraron SKUs en esta URL. Asegúrate de que el formato sea el correcto.")
+            st.warning("No se encontraron SKUs en esta URL.")
