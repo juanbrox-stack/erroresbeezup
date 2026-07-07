@@ -3,12 +3,42 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import io
+import re
 
 # Configuración de la página en modo ancho
 st.set_page_config(page_title="Extractor de Errores Marketplaces", page_icon="🛒", layout="wide")
 
 st.title("🛒 Extractor Agrupado e Interactivo de Errores")
 st.markdown("Pega la URL del reporte HTML para obtener los SKUs organizados con enlaces directos en Excel.")
+
+# --- FUNCIONES AUXILIARES ---
+def slugify(text, max_len=60):
+    """Nombre de fichero seguro a partir de un texto."""
+    slug = re.sub(r'[^A-Za-z0-9]+', '_', text).strip('_').lower()
+    return slug[:max_len].strip('_') or "error"
+
+def extract_field_name(error_msg):
+    """Devuelve el nombre del campo que va entre paréntesis."""
+    matches = re.findall(r'\(([^)]*)\)', error_msg)
+    for m in matches:
+        if m.strip():
+            return m.strip()
+    return error_msg  # fallback si no hay paréntesis
+
+def make_sheet_name(name, existing):
+    """Nombre de pestaña válido para Excel (máx 31, sin símbolos prohibidos, único)."""
+    clean = re.sub(r'[:\\/?*\[\]]', ' ', name)   # símbolos prohibidos en hojas Excel
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    clean = clean[:31] if clean else "Error"
+    
+    base = clean
+    n = 1
+    while clean.lower() in existing:
+        suffix = f"_{n}"
+        clean = (base[:31 - len(suffix)]).strip() + suffix
+        n += 1
+    existing.add(clean.lower())
+    return clean
 
 # --- SECCIÓN DE CONFIGURACIÓN DE MARKETPLACE ---
 col_mp, col_url = st.columns([1, 3])
@@ -33,6 +63,12 @@ def extract_data(url_report):
     try:
         response = requests.get(url_report)
         response.raise_for_status()
+        
+        # 🔧 Corrige el problema de acentos (Ã³ -> ó, Ã± -> ñ)
+        # requests asume ISO-8859-1 si el servidor no envía charset
+        if not response.encoding or response.encoding.lower() == 'iso-8859-1':
+            response.encoding = response.apparent_encoding or 'utf-8'
+        
         soup = BeautifulSoup(response.text, 'html.parser')
         
         results = []
@@ -75,7 +111,6 @@ if url:
             st.dataframe(df_counts, use_container_width=True, hide_index=True)
             
             st.subheader("📋 Detalle por Bloques de Error")
-            # Agrupar en el orden del dataframe de conteos (de mayor a menor)
             for idx, row in df_counts.iterrows():
                 error_msg = row['Tipo de Error']
                 cant = row['Cantidad de SKUs Afectados']
@@ -86,11 +121,14 @@ if url:
                     df_error = group[['SKU']].reset_index(drop=True)
                     st.dataframe(df_error, use_container_width=True, hide_index=True)
                     
-                    # Botón de descarga propio: exporta únicamente el SKU (sin columna id)
+                    # Nombre descriptivo del CSV usando el campo entre paréntesis
+                    field_name = extract_field_name(error_msg)
+                    file_name_error = f"error_{idx + 1}_{slugify(field_name)}_{mp_clean}.csv"
+                    
                     st.download_button(
                         label="📥 Descargar SKUs de este error (.csv)",
-                        data=df_error.to_csv(index=False).encode('utf-8'),
-                        file_name=f"error_{idx + 1}_{mp_clean}.csv",
+                        data=df_error.to_csv(index=False).encode('utf-8-sig'),
+                        file_name=file_name_error,
                         mime="text/csv",
                         key=f"dl_error_{idx}"  # key único obligatorio dentro del bucle
                     )
@@ -102,12 +140,17 @@ if url:
                 # 1. Pestaña global por si se quiere un volcado general
                 df.to_excel(writer, sheet_name='Todos los SKUs', index=False)
                 
-                # 2. Generar pestañas individuales mapeadas por número (Error_1, Error_2...)
+                # 2. Pestañas individuales nombradas por el campo del error
                 error_to_sheet = {}
+                used_sheet_names = {'todos los skus', 'resumen errores'}  # reservados
+                
                 for i, row in df_counts.iterrows():
                     error_msg = row['Tipo de Error']
                     group = df[df['Error'] == error_msg]
-                    sheet_name = f"Error_{i + 1}"
+                    
+                    # Nombre de campo entre paréntesis -> nombre de pestaña
+                    field_name = extract_field_name(error_msg)
+                    sheet_name = make_sheet_name(f"{i + 1}_{field_name}", used_sheet_names)
                     
                     group[['SKU']].to_excel(writer, sheet_name=sheet_name, index=False)
                     error_to_sheet[error_msg] = sheet_name
