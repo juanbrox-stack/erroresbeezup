@@ -44,8 +44,8 @@ def extract_data(url_report):
                 current_error_msg = text
             
             if text.startswith("SKU "):
-                if " : " in text:
-                    parts = text.split(" : ", 1)
+                if ": " in text:
+                    parts = text.split(": ", 1)
                     sku = parts[0].replace("SKU ", "").strip()
                     detail = parts[1].strip()
                 else:
@@ -72,7 +72,7 @@ if url:
             
             # --- VISTA PREVIA EN LA WEB APP ---
             st.subheader("🔍 Resumen de errores encontrados")
-            st.dataframe(df_counts, use_container_width=True)
+            st.dataframe(df_counts, use_container_width=True, hide_index=True)
             
             st.subheader("📋 Detalle por Bloques de Error")
             # Agrupar en el orden del dataframe de conteos (de mayor a menor)
@@ -82,7 +82,18 @@ if url:
                 group = df[df['Error'] == error_msg]
                 
                 with st.expander(f"❌ [{idx + 1}] {error_msg} ({cant} SKUs afectados)"):
-                    st.dataframe(group[['SKU']].reset_index(drop=True), use_container_width=True)
+                    # Solo la columna SKU, sin índice
+                    df_error = group[['SKU']].reset_index(drop=True)
+                    st.dataframe(df_error, use_container_width=True, hide_index=True)
+                    
+                    # Botón de descarga propio: exporta únicamente el SKU (sin columna id)
+                    st.download_button(
+                        label="📥 Descargar SKUs de este error (.csv)",
+                        data=df_error.to_csv(index=False).encode('utf-8'),
+                        file_name=f"error_{idx + 1}_{mp_clean}.csv",
+                        mime="text/csv",
+                        key=f"dl_error_{idx}"  # key único obligatorio dentro del bucle
+                    )
             
             # --- GENERACIÓN DE EXCEL INTERACTIVO CON XLSXWRITER ---
             buffer = io.BytesIO()
@@ -120,7 +131,7 @@ if url:
                 for idx, row in df_counts.iterrows():
                     error_text = row['Tipo de Error']
                     target_sheet = error_to_sheet.get(error_text, 'Todos los SKUs')
-                    row_excel = idx + 1 # +1 debido a la fila de cabecera
+                    row_excel = idx + 1  # +1 debido a la fila de cabecera
                     
                     # Genera la fórmula internal:'NombrePestaña'!A1
                     worksheet.write_url(
